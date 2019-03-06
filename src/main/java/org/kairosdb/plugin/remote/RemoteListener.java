@@ -16,6 +16,7 @@
 
 package org.kairosdb.plugin.remote;
 
+import com.google.common.base.Stopwatch;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Multimap;
@@ -39,6 +40,7 @@ import java.io.*;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.SortedMap;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -46,18 +48,20 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 
 
-public class RemoteDatastore
+public class RemoteListener
 {
-	private static final Logger logger = LoggerFactory.getLogger(RemoteDatastore.class);
-	private static final String DATA_DIR_PROP = "kairosdb.datastore.remote.data_dir";
-	private static final String DROP_PERCENT_PROP = "kairosdb.datastore.remote.drop_on_used_disk_space_threshold_percent";
-	private static final String METRIC_PREFIX_FILTER = "kairosdb.datastore.remote.prefix_filter";
+	private static final Logger logger = LoggerFactory.getLogger(RemoteListener.class);
+	private static final String DATA_DIR_PROP = "kairosdb.remote.data_dir";
+	private static final String DROP_PERCENT_PROP = "kairosdb.remote.drop_on_used_disk_space_threshold_percent";
+	private static final String METRIC_PREFIX_FILTER = "kairosdb.remote.prefix_filter";
 
-	private static final String FILE_SIZE_METRIC = "kairosdb.datastore.remote.file_size";
-	private static final String ZIP_FILE_SIZE_METRIC = "kairosdb.datastore.remote.zip_file_size";
-	private static final String WRITE_SIZE_METRIC = "kairosdb.datastore.remote.write_size";
-	private static final String TIME_TO_SEND_METRIC = "kairosdb.datastore.remote.time_to_send";
-	private static final String DELETE_ZIP_METRIC = "kairosdb.datastore.remote.deleted_zipFile_size";
+	private static final String FILE_SIZE_METRIC = "kairosdb.remote.file_size";
+	private static final String ZIP_FILE_SIZE_METRIC = "kairosdb.remote.zip_file_size";
+	private static final String WRITE_SIZE_METRIC = "kairosdb.remote.write_size";
+	private static final String TIME_TO_SEND_METRIC = "kairosdb.remote.time_to_send";
+	private static final String DELETE_ZIP_METRIC = "kairosdb.remote.deleted_zipFile_size";
+	private static final String FLUSH_INTERVAL = "kairosdb.remote.flush_interval_ms";
+	private static final String MAX_FILE_SIZE_MB = "kairosdb.remote.max_file_size_mb";
 
 	private final Object m_dataFileLock = new Object();
 	private final Object m_sendLock = new Object();
@@ -65,22 +69,23 @@ public class RemoteDatastore
 	private final File m_dataDirectory;
 	private final RemoteHost m_remoteHost;
 	private final DiskUtils m_diskUtils;
+	private final int m_flushInterval;
+	private final ImmutableSortedMap<String, String> m_tags;
 	private BufferedWriter m_dataWriter;
 	private final Publisher<DataPointEvent> m_publisher;
 	private String m_dataFileName;
 	private volatile boolean m_firstDataPoint = true;
 	private int m_dataPointCounter;
+	private Stopwatch m_sendTimer = Stopwatch.createUnstarted();
 
 	private volatile Multimap<DataPointKey, DataPoint> m_dataPointMultimap;
 	private final Object m_mapLock = new Object();  //Lock for the above map
 
 	private volatile boolean m_running;
 
-	@Inject
-	@Named("HOSTNAME")
-	private String m_hostName = "localhost";
-
 	private String[] m_prefixFilterArray = new String[0];
+
+	private long m_maxFileSize = 1024*1024*10;
 
 	@Inject
 	private LongDataPointFactory m_longDataPointFactory = new LongDataPointFactoryImpl();
@@ -96,9 +101,13 @@ public class RemoteDatastore
 	}
 
 	@Inject
-	public RemoteDatastore(@Named(DATA_DIR_PROP) String dataDir,
-			@Named(DROP_PERCENT_PROP) String dropPercent, RemoteHost remoteHost,
-			FilterEventBus eventBus, DiskUtils diskUtils) throws IOException, DatastoreException
+	public RemoteListener(@Named(DATA_DIR_PROP) String dataDir,
+			@Named(DROP_PERCENT_PROP) String dropPercent,
+			@Named(FLUSH_INTERVAL) int flushInterval,
+			@Named("HOSTNAME") String hostName,
+			RemoteHost remoteHost,
+			FilterEventBus eventBus,
+			DiskUtils diskUtils) throws IOException, DatastoreException
 	{
 		m_dataDirectory = new File(dataDir);
 		m_dropPercent = Integer.parseInt(dropPercent);
@@ -107,6 +116,11 @@ public class RemoteDatastore
 		m_remoteHost = checkNotNull(remoteHost, "remote host must not be null");
 		m_publisher = eventBus.createPublisher(DataPointEvent.class);
 		m_diskUtils = checkNotNull(diskUtils, "diskUtils must not be null");
+		m_flushInterval = flushInterval;
+
+		m_tags = ImmutableSortedMap.<String, String>naturalOrder()
+				.put("host", hostName)
+				.build();
 
 		createNewMap();
 
@@ -123,7 +137,7 @@ public class RemoteDatastore
 				{
 					flushMap();
 
-					Thread.sleep(2000);
+					Thread.sleep(m_flushInterval);
 				}
 				catch (Exception e)
 				{
@@ -136,6 +150,12 @@ public class RemoteDatastore
 
 		flushThread.start();
 
+	}
+
+	@Inject
+	public void setMaxFileSize(@Named(MAX_FILE_SIZE_MB)long maxFileSize)
+	{
+		m_maxFileSize = maxFileSize * 1024 * 1024;
 	}
 
 	private Multimap<DataPointKey, DataPoint> createNewMap()
@@ -161,6 +181,9 @@ public class RemoteDatastore
 			{
 				try
 				{
+					//Check if we need to role to a new file because of size
+					rollAndZipFile(System.currentTimeMillis(), true);
+
 					for (DataPointKey dataPointKey : flushMap.keySet())
 					{
 						//We have to clear the writer every time or it gets confused
@@ -359,7 +382,7 @@ public class RemoteDatastore
 					Files.delete(zipFiles[0].toPath());
 					logger.warn("Disk is too full to create zip file. Deleted older zip file " + zipFiles[0].getName() + " size: " + size);
 					// For forwarding this metric will be reported both on the local kairos node and the remote
-					m_publisher.post(new DataPointEvent(DELETE_ZIP_METRIC, ImmutableSortedMap.of("host", m_hostName),
+					m_publisher.post(new DataPointEvent(DELETE_ZIP_METRIC, m_tags,
 							m_longDataPointFactory.createDataPoint(System.currentTimeMillis(), size)));
 					cleanDiskSpace(); // continue cleaning until space is freed up or all zip files are deleted.
 				}
@@ -376,39 +399,65 @@ public class RemoteDatastore
 		return m_dropPercent >= 100 || m_diskUtils.percentAvailable(m_dataDirectory) < m_dropPercent;
 	}
 
+	//Rolls to a new file and zips up the current one
+	private void rollAndZipFile(long now, boolean conditionalRoll) throws IOException
+	{
+		int dataPointCounter;
+		String oldDataFile;
+		long fileSize;
+
+		synchronized (m_dataFileLock)
+		{
+			fileSize = (new File(m_dataFileName)).length();
+
+			if (conditionalRoll)
+			{
+				//Check file size
+				if (fileSize < m_maxFileSize)
+					return;
+			}
+
+			oldDataFile = m_dataFileName;
+
+			closeDataFile();
+			//m_dataPointCounter gets reset in openDataFile()
+			dataPointCounter = m_dataPointCounter;
+			openDataFile();
+		}
+
+		long zipSize = zipFile(oldDataFile);
+
+		try
+		{
+			putDataPoint(new DataPointEvent(FILE_SIZE_METRIC, m_tags, m_longDataPointFactory.createDataPoint(now, fileSize), 0));
+			putDataPoint(new DataPointEvent(WRITE_SIZE_METRIC, m_tags, m_longDataPointFactory.createDataPoint(now, dataPointCounter), 0));
+			putDataPoint(new DataPointEvent(ZIP_FILE_SIZE_METRIC, m_tags, m_longDataPointFactory.createDataPoint(now, zipSize), 0));
+		}
+		catch (DatastoreException e)
+		{
+			logger.error("Error writing remote metrics", e);
+		}
+	}
+
+	//Called by RemoteSendJob that is on a timer set in config
 	void sendData() throws IOException
 	{
 		synchronized (m_sendLock)
 		{
-			String oldDataFile = m_dataFileName;
+
 			long now = System.currentTimeMillis();
+			m_sendTimer.start();
 
-			long fileSize = (new File(m_dataFileName)).length();
-
-			ImmutableSortedMap<String, String> tags = ImmutableSortedMap.<String, String>naturalOrder()
-					.put("host", m_hostName)
-					.build();
-
-			int dataPointCounter;
-			synchronized (m_dataFileLock)
-			{
-				closeDataFile();
-				dataPointCounter = m_dataPointCounter;
-				openDataFile();
-			}
-
-			long zipSize = zipFile(oldDataFile);
+			rollAndZipFile(now, false);
 
 			sendAllZipfiles();
 
-			long timeToSend = System.currentTimeMillis() - now;
+			long timeToSend = m_sendTimer.elapsed(TimeUnit.MILLISECONDS);
+			m_sendTimer.reset();
 
 			try
 			{
-				putDataPoint(new DataPointEvent(FILE_SIZE_METRIC, tags, m_longDataPointFactory.createDataPoint(now, fileSize), 0));
-				putDataPoint(new DataPointEvent(WRITE_SIZE_METRIC, tags, m_longDataPointFactory.createDataPoint(now, dataPointCounter), 0));
-				putDataPoint(new DataPointEvent(ZIP_FILE_SIZE_METRIC, tags, m_longDataPointFactory.createDataPoint(now, zipSize), 0));
-				putDataPoint(new DataPointEvent(TIME_TO_SEND_METRIC, tags, m_longDataPointFactory.createDataPoint(now, timeToSend), 0));
+				putDataPoint(new DataPointEvent(TIME_TO_SEND_METRIC, m_tags, m_longDataPointFactory.createDataPoint(now, timeToSend), 0));
 			}
 			catch (DatastoreException e)
 			{

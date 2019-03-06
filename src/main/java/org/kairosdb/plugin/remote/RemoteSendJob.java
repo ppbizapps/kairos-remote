@@ -39,18 +39,18 @@ import static org.quartz.TriggerBuilder.newTrigger;
 public class RemoteSendJob implements KairosDBJob
 {
 	public static final Logger logger = LoggerFactory.getLogger(RemoteSendJob.class);
-	private static final String SCHEDULE = "kairosdb.datastore.remote.schedule";
-	private static final String DELAY = "kairosdb.datastore.remote.random_delay";
+	private static final String SCHEDULE = "kairosdb.remote.schedule";
+	private static final String DELAY = "kairosdb.remote.random_delay";
 
 	private String m_schedule;
 	private int m_delay;
 	private Random m_rand;
-	private RemoteDatastore m_datastore;
+	private RemoteListener m_datastore;
 	private Exception m_currentException;
 
 	@Inject
 	public RemoteSendJob(@Named(SCHEDULE) String schedule,
-			@Named(DELAY) int delay, RemoteDatastore datastore)
+			@Named(DELAY) int delay, RemoteListener datastore)
 	{
 		m_schedule = schedule;
 		m_delay = delay;

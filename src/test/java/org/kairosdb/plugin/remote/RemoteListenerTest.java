@@ -21,7 +21,7 @@ import static org.junit.Assert.assertThat;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
-public class RemoteDatastoreTest
+public class RemoteListenerTest
 {
 	private RemoteHost mockRemoteHost;
 	private FilterEventBus mockEventBus;
@@ -53,7 +53,8 @@ public class RemoteDatastoreTest
 	public void test_cleanup() throws IOException, DatastoreException
 	{
 		when(mockDiskUtils.percentAvailable(any())).thenReturn(96L).thenReturn(96L).thenReturn(80L);
-		RemoteDatastore remoteDatastore = new RemoteDatastore(tempDir.getAbsolutePath(), "95", mockRemoteHost, mockEventBus, mockDiskUtils);
+		RemoteListener remoteListener = new RemoteListener(tempDir.getAbsolutePath(), "95",
+				2000,"localhost", mockRemoteHost, mockEventBus, mockDiskUtils);
 
 		// Create zip files
 		createZipFile("zipFile1.gz");
@@ -61,21 +62,22 @@ public class RemoteDatastoreTest
 		createZipFile("zipFile3.gz");
 		createZipFile("zipFile4.gz");
 
-		remoteDatastore.sendData(); // Note that sendData() will create an additional zip file (so 5 zips)
+		remoteListener.sendData(); // Note that sendData() will create an additional zip file (so 5 zips)
 
 		// assert that temp dir only contains x number of zip files
 		File[] files = tempDir.listFiles((dir, name) -> name.endsWith(".gz"));
 		assertThat(files.length, equalTo(3));
 		verify(mockPublisher, times(2)).post(argThat(
-				new DataPointEventMatcher(createDataPoint("kairosdb.datastore.remote.deleted_zipFile_size", 14L))));
+				new DataPointEventMatcher(createDataPoint("kairosdb.remote.deleted_zipFile_size", 14L))));
 	}
 
 	@Test
 	public void test_sendData() throws IOException, DatastoreException
 	{
-		RemoteDatastore remoteDatastore = new RemoteDatastore(tempDir.getAbsolutePath(), "95", mockRemoteHost, mockEventBus, mockDiskUtils);
+		RemoteListener remoteListener = new RemoteListener(tempDir.getAbsolutePath(), "95",
+				2000,"localhost", mockRemoteHost, mockEventBus, mockDiskUtils);
 
-		remoteDatastore.sendData();
+		remoteListener.sendData();
 
 		verify(mockRemoteHost, times(1)).sendZipFile(any());
 	}

@@ -26,16 +26,27 @@ import static org.kairosdb.util.Preconditions.checkNotNullOrEmpty;
 public class RemoteHostImpl implements RemoteHost
 {
 	private static final Logger logger = LoggerFactory.getLogger(RemoteHostImpl.class);
-	private static final String REMOTE_URL_PROP = "kairosdb.datastore.remote.remote_url";
+	private static final String REMOTE_URL_PROP = "kairosdb.remote.remote_url";
+	private static final String CONNECTION_REQUEST_TIMEOUT = "kairosdb.remote.connection_request_timeout";
+	private static final String CONNECTION_TIMEOUT = "kairosdb.remote.connection_timeout";
+	private static final String SOCKET_TIMEOUT = "kairosdb.remote.socket_timeout";
 
 	private final String url;
 	private CloseableHttpClient client;
 
 	@Inject
-	public RemoteHostImpl(@Named(REMOTE_URL_PROP) String remoteUrl)
+	public RemoteHostImpl(@Named(REMOTE_URL_PROP) String remoteUrl,
+			@Named(CONNECTION_REQUEST_TIMEOUT) int requestTimeout,
+			@Named(CONNECTION_TIMEOUT) int connectionTimeout,
+			@Named(SOCKET_TIMEOUT) int socketTimeout)
 	{
 		this.url = checkNotNullOrEmpty(remoteUrl, "url must not be null or empty");
 		client = HttpClients.createDefault();
+		RequestConfig requestConfig = RequestConfig.custom().setSocketTimeout(socketTimeout)
+				.setConnectionRequestTimeout(requestTimeout)
+				.setConnectTimeout(connectionTimeout)
+				.build();
+		HttpClients.custom().setDefaultRequestConfig(requestConfig);
 	}
 
 	@Override
@@ -67,7 +78,7 @@ public class RemoteHostImpl implements RemoteHost
 			{
 				//This means it was a bad file, more than likely the json is not well formed
 				//renaming it will make sure we don't try it again as it will likely fail again
-				//Most of the data likely was loaded into kairos
+				//All of the data likely was loaded into kairos especially if it was missing the last ]
 				ByteArrayOutputStream body = new ByteArrayOutputStream();
 				response.getEntity().writeTo(body);
 				logger.error("Unable to send file " + zipFile + ": " + response.getStatusLine() +

@@ -11,7 +11,7 @@ public class ListenerModule extends AbstractModule
 	@Override
 	protected void configure()
 	{
-		bind(RemoteDatastore.class).in(Scopes.SINGLETON);
+		bind(RemoteListener.class).in(Scopes.SINGLETON);
 		bind(RemoteSendJob.class).in(Scopes.SINGLETON);
 		bind(RemoteDatastoreHealthCheck.class).in(Scopes.SINGLETON);
 		bind(DiskUtils.class).to(DiskUtilsImpl.class);
