@@ -396,7 +396,8 @@ public class RemoteListener
 
 	private boolean hasSpace()
 	{
-		return m_dropPercent >= 100 || m_diskUtils.percentAvailable(m_dataDirectory) < m_dropPercent;
+		long usedSpace = 100 - m_diskUtils.percentAvailable(m_dataDirectory);
+		return m_dropPercent >= 100 || usedSpace < m_dropPercent;
 	}
 
 	//Rolls to a new file and zips up the current one

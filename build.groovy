@@ -26,16 +26,13 @@ println("===============================================")
 
 saw.setProperty(Tablesaw.PROP_MULTI_THREAD_OUTPUT, Tablesaw.PROP_VALUE_ON)
 
-programName = "kairos-kafka-monitor"
+programName = "kairos-remote"
 //Do not use '-' in version string, it breaks rpm uninstall.
-version = "1.3.0"
-release = saw.getProperty("KAIROS_RELEASE_NUMBER", "0.1beta") //package release number
-summary = "KairosDB"
+version = "1.0"
+release = saw.getProperty("KAIROS_RELEASE_NUMBER", "1") //package release number
+summary = "KairosDB Remote"
 description = """\
-KairosDB is a time series database that stores numeric values along
-with key/value tags to a nosql data store.  Currently supported
-backends are Cassandra and H2.  An H2 implementation is provided
-for development work.
+Remote plugin for KairosDB to send metrics to a remote KairosDB instance.
 """
 
 
@@ -133,12 +130,12 @@ def doRPM(Rule rule)
 
 	rpmBuilder.addDependencyMore("kairosdb", "1.2.0")
 
-	addFileSetToRPM(rpmBuilder, "$rpmBaseInstallDir/lib/kafka-monitor", new RegExFileSet("target", ".*\\.jar"))
-	addFileSetToRPM(rpmBuilder, "$rpmBaseInstallDir/lib/kafka-monitor", new RegExFileSet("target/dependency", ".*\\.jar"))
+	addFileSetToRPM(rpmBuilder, "$rpmBaseInstallDir/lib/kairos-remote", new RegExFileSet("target", ".*\\.jar"))
+	addFileSetToRPM(rpmBuilder, "$rpmBaseInstallDir/lib/kairos-remote", new RegExFileSet("target/dependency", ".*\\.jar"))
 
 
-	rpmBuilder.addFile("$rpmBaseInstallDir/conf/kafka-monitor.properties",
-			new File("src/main/resources/kafka-monitor.properties"), 0644, new Directive(Directive.RPMFILE_CONFIG | Directive.RPMFILE_NOREPLACE))
+	rpmBuilder.addFile("$rpmBaseInstallDir/conf/kairos-remote.properties",
+			new File("src/main/resources/kairos-remote.properties"), 0644, new Directive(Directive.RPMFILE_CONFIG | Directive.RPMFILE_NOREPLACE))
 
 
 	println("Building RPM "+rule.getTarget())

@@ -52,7 +52,7 @@ public class RemoteListenerTest
 	@Test
 	public void test_cleanup() throws IOException, DatastoreException
 	{
-		when(mockDiskUtils.percentAvailable(any())).thenReturn(96L).thenReturn(96L).thenReturn(80L);
+		when(mockDiskUtils.percentAvailable(any())).thenReturn(4L).thenReturn(4L).thenReturn(20L);
 		RemoteListener remoteListener = new RemoteListener(tempDir.getAbsolutePath(), "95",
 				2000,"localhost", mockRemoteHost, mockEventBus, mockDiskUtils);
 
@@ -74,6 +74,7 @@ public class RemoteListenerTest
 	@Test
 	public void test_sendData() throws IOException, DatastoreException
 	{
+		when(mockDiskUtils.percentAvailable(any())).thenReturn(20L);
 		RemoteListener remoteListener = new RemoteListener(tempDir.getAbsolutePath(), "95",
 				2000,"localhost", mockRemoteHost, mockEventBus, mockDiskUtils);
 
