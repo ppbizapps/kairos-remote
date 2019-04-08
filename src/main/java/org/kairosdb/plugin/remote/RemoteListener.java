@@ -76,7 +76,6 @@ public class RemoteListener
 	private String m_dataFileName;
 	private volatile boolean m_firstDataPoint = true;
 	private int m_dataPointCounter;
-	private Stopwatch m_sendTimer = Stopwatch.createUnstarted();
 
 	private volatile Multimap<DataPointKey, DataPoint> m_dataPointMultimap;
 	private final Object m_mapLock = new Object();  //Lock for the above map
@@ -447,14 +446,13 @@ public class RemoteListener
 		{
 
 			long now = System.currentTimeMillis();
-			m_sendTimer.start();
+			Stopwatch sendTimer = Stopwatch.createStarted();
+			long timeToSend = 0L;
 
 			rollAndZipFile(now, false);
-
 			sendAllZipfiles();
 
-			long timeToSend = m_sendTimer.elapsed(TimeUnit.MILLISECONDS);
-			m_sendTimer.reset();
+			timeToSend = sendTimer.elapsed(TimeUnit.MILLISECONDS);
 
 			try
 			{
