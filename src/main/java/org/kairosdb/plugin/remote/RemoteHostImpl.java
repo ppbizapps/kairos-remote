@@ -2,6 +2,7 @@ package org.kairosdb.plugin.remote;
 
 import com.google.inject.Inject;
 import com.google.inject.name.Named;
+import org.apache.http.HttpResponse;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
@@ -9,6 +10,8 @@ import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
+import org.apache.http.impl.nio.client.HttpAsyncClients;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.kairosdb.core.exception.DatastoreException;
@@ -20,6 +23,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.kairosdb.util.Preconditions.checkNotNullOrEmpty;
 
@@ -32,7 +39,8 @@ public class RemoteHostImpl implements RemoteHost
 	private static final String SOCKET_TIMEOUT = "kairosdb.remote.socket_timeout";
 
 	private final String url;
-	private CloseableHttpClient client;
+	private CloseableHttpAsyncClient client;
+	private final long futureTimeout;
 
 	@Inject
 	public RemoteHostImpl(@Named(REMOTE_URL_PROP) String remoteUrl,
@@ -41,12 +49,13 @@ public class RemoteHostImpl implements RemoteHost
 			@Named(SOCKET_TIMEOUT) int socketTimeout)
 	{
 		this.url = checkNotNullOrEmpty(remoteUrl, "url must not be null or empty");
-		client = HttpClients.createDefault();
+		client = HttpAsyncClients.createDefault();
 		RequestConfig requestConfig = RequestConfig.custom().setSocketTimeout(socketTimeout)
 				.setConnectionRequestTimeout(requestTimeout)
 				.setConnectTimeout(connectionTimeout)
 				.build();
 		HttpClients.custom().setDefaultRequestConfig(requestConfig);
+		futureTimeout = socketTimeout + requestTimeout + connectionTimeout;
 	}
 
 	@Override
@@ -59,8 +68,11 @@ public class RemoteHostImpl implements RemoteHost
 		post.setHeader("Content-Type", "application/gzip");
 
 		post.setEntity(new InputStreamEntity(zipStream, zipFile.length()));
-		try (CloseableHttpResponse response = client.execute(post))
+		Future<HttpResponse> responseFuture = client.execute(post, null);
+
+		try
 		{
+			HttpResponse response = responseFuture.get(futureTimeout, TimeUnit.MILLISECONDS);
 
 			zipStream.close();
 			if (response.getStatusLine().getStatusCode() == 204)
@@ -94,6 +106,10 @@ public class RemoteHostImpl implements RemoteHost
 						" - " + body.toString("UTF-8"));
 			}
 		}
+		catch (Exception e)
+		{
+			throw new IOException("Unable to connect to remote host", e);
+		}
 	}
 
 	@Override
@@ -104,23 +120,22 @@ public class RemoteHostImpl implements RemoteHost
 			HttpGet get = new HttpGet(url + "/api/v1/version");
 			//get.setConfig(RequestConfig.custom().
 
-			try (CloseableHttpResponse response = client.execute(get))
-			{
-				ByteArrayOutputStream bout = new ByteArrayOutputStream();
-				response.getEntity().writeTo(bout);
+			HttpResponse response = client.execute(get, null).get(futureTimeout, TimeUnit.MILLISECONDS);
+			ByteArrayOutputStream bout = new ByteArrayOutputStream();
+			response.getEntity().writeTo(bout);
 
-				JSONObject respJson = new JSONObject(bout.toString("UTF-8"));
+			JSONObject respJson = new JSONObject(bout.toString("UTF-8"));
 
-				logger.info("Connecting to remote Kairos version: " + respJson.getString("version"));
-			}
-		}
-		catch (IOException e)
-		{
-			throw new DatastoreException("Unable to connect to remote kairos node.", e);
+			logger.info("Connecting to remote Kairos version: " + respJson.getString("version"));
 		}
 		catch (JSONException e)
 		{
 			throw new DatastoreException("Unable to parse response from remote kairos node.", e);
 		}
+		catch (Exception e)
+		{
+			throw new DatastoreException("Unable to connect to remote kairos node.", e);
+		}
+
 	}
 }
