@@ -1,20 +1,23 @@
 package org.kairosdb.plugin.remote;
 
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.inject.Inject;
 import com.google.inject.name.Named;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.InputStreamEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
 import org.apache.http.impl.nio.client.HttpAsyncClients;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.kairosdb.core.datapoints.LongDataPointFactory;
+import org.kairosdb.core.datapoints.LongDataPointFactoryImpl;
 import org.kairosdb.core.exception.DatastoreException;
+import org.kairosdb.eventbus.FilterEventBus;
+import org.kairosdb.eventbus.Publisher;
+import org.kairosdb.events.DataPointEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,10 +26,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.kairosdb.util.Preconditions.checkNotNullOrEmpty;
 
@@ -38,41 +39,65 @@ public class RemoteHostImpl implements RemoteHost
 	private static final String CONNECTION_TIMEOUT = "kairosdb.remote.connection_timeout";
 	private static final String SOCKET_TIMEOUT = "kairosdb.remote.socket_timeout";
 
-	private final String url;
-	private CloseableHttpAsyncClient client;
-	private final long futureTimeout;
+	private static final String ERROR_METRIC = "kairosdb.remote.error";
+
+	private final String m_url;
+	private final Publisher<DataPointEvent> m_publisher;
+	private final ImmutableSortedMap<String, String> m_tags;
+	private CloseableHttpAsyncClient m_client;
+	private final long m_futureTimeout;
+
+	@Inject
+	private LongDataPointFactory m_longDataPointFactory = new LongDataPointFactoryImpl();
 
 	@Inject
 	public RemoteHostImpl(@Named(REMOTE_URL_PROP) String remoteUrl,
 			@Named(CONNECTION_REQUEST_TIMEOUT) int requestTimeout,
 			@Named(CONNECTION_TIMEOUT) int connectionTimeout,
-			@Named(SOCKET_TIMEOUT) int socketTimeout)
+			@Named(SOCKET_TIMEOUT) int socketTimeout,
+			@Named("HOSTNAME") String hostName,
+			FilterEventBus eventBus)
 	{
-		this.url = checkNotNullOrEmpty(remoteUrl, "url must not be null or empty");
-		client = HttpAsyncClients.createDefault();
+		m_url = checkNotNullOrEmpty(remoteUrl, "url must not be null or empty");
+		m_publisher = eventBus.createPublisher(DataPointEvent.class);
 		RequestConfig requestConfig = RequestConfig.custom().setSocketTimeout(socketTimeout)
 				.setConnectionRequestTimeout(requestTimeout)
 				.setConnectTimeout(connectionTimeout)
 				.build();
-		HttpClients.custom().setDefaultRequestConfig(requestConfig);
-		futureTimeout = socketTimeout + requestTimeout + connectionTimeout;
+		m_client = HttpAsyncClients.custom()
+				.setDefaultRequestConfig(requestConfig)
+				.build();
+		m_futureTimeout = socketTimeout + requestTimeout + connectionTimeout;
+
+		m_client.start();
+
+		m_tags = ImmutableSortedMap.<String, String>naturalOrder()
+				.put("host", hostName)
+				.build();
+	}
+
+	private void sendErrorMetric(String cause, int value)
+	{
+		ImmutableSortedMap<String, String> tags = ImmutableSortedMap.<String, String>naturalOrder().putAll(m_tags).put("cause", cause).build();
+		m_publisher.post(new DataPointEvent(ERROR_METRIC, tags,
+				m_longDataPointFactory.createDataPoint(System.currentTimeMillis(), value)));
 	}
 
 	@Override
 	public void sendZipFile(File zipFile) throws IOException
 	{
 		logger.debug("Sending {}", zipFile);
-		HttpPost post = new HttpPost(url + "/api/v1/datapoints");
+		HttpPost post = new HttpPost(m_url + "/api/v1/datapoints");
 
 		FileInputStream zipStream = new FileInputStream(zipFile);
 		post.setHeader("Content-Type", "application/gzip");
 
 		post.setEntity(new InputStreamEntity(zipStream, zipFile.length()));
-		Future<HttpResponse> responseFuture = client.execute(post, null);
+		Future<HttpResponse> responseFuture = m_client.execute(post, null);
 
 		try
 		{
-			HttpResponse response = responseFuture.get(futureTimeout, TimeUnit.MILLISECONDS);
+			HttpResponse response = responseFuture.get(m_futureTimeout, TimeUnit.MILLISECONDS);
 
 			zipStream.close();
 			if (response.getStatusLine().getStatusCode() == 204)
@@ -84,6 +109,7 @@ public class RemoteHostImpl implements RemoteHost
 				catch (IOException e)
 				{
 					logger.error("Could not delete zip file: " + zipFile.getName());
+					sendErrorMetric("delete_failure", 1);
 				}
 			}
 			else if (response.getStatusLine().getStatusCode() == 400)
@@ -97,6 +123,7 @@ public class RemoteHostImpl implements RemoteHost
 						" - " + body.toString("UTF-8"));
 
 				zipFile.renameTo(new File(zipFile.getPath() + ".failed"));
+				sendErrorMetric("bad_json", 1);
 			}
 			else
 			{
@@ -104,10 +131,12 @@ public class RemoteHostImpl implements RemoteHost
 				response.getEntity().writeTo(body);
 				logger.error("Unable to send file " + zipFile + ": " + response.getStatusLine() +
 						" - " + body.toString("UTF-8"));
+				sendErrorMetric("upload_failure", 1);
 			}
 		}
 		catch (Exception e)
 		{
+			sendErrorMetric("send_failure", 1);
 			throw new IOException("Unable to connect to remote host", e);
 		}
 	}
@@ -117,10 +146,10 @@ public class RemoteHostImpl implements RemoteHost
 	{
 		try
 		{
-			HttpGet get = new HttpGet(url + "/api/v1/version");
+			HttpGet get = new HttpGet(m_url + "/api/v1/version");
 			//get.setConfig(RequestConfig.custom().
 
-			HttpResponse response = client.execute(get, null).get(futureTimeout, TimeUnit.MILLISECONDS);
+			HttpResponse response = m_client.execute(get, null).get(m_futureTimeout, TimeUnit.MILLISECONDS);
 			ByteArrayOutputStream bout = new ByteArrayOutputStream();
 			response.getEntity().writeTo(bout);
 
