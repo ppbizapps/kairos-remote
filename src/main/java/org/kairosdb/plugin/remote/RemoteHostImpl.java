@@ -29,8 +29,6 @@ import java.nio.file.Files;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.kairosdb.util.Preconditions.checkNotNullOrEmpty;
-
 public class RemoteHostImpl implements RemoteHost
 {
 	private static final Logger logger = LoggerFactory.getLogger(RemoteHostImpl.class);
@@ -58,7 +56,10 @@ public class RemoteHostImpl implements RemoteHost
 			@Named("HOSTNAME") String hostName,
 			FilterEventBus eventBus)
 	{
-		m_url = checkNotNullOrEmpty(remoteUrl, "url must not be null or empty");
+		m_url = remoteUrl;
+		if (m_url == null || m_url.isEmpty())
+			throw new IllegalArgumentException("url must not be null or empty");
+
 		m_publisher = eventBus.createPublisher(DataPointEvent.class);
 		RequestConfig requestConfig = RequestConfig.custom().setSocketTimeout(socketTimeout)
 				.setConnectionRequestTimeout(requestTimeout)
