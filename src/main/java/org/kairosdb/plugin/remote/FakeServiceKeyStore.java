@@ -1,7 +1,6 @@
 package org.kairosdb.plugin.remote;
 
 import org.kairosdb.core.datastore.ServiceKeyStore;
-import org.kairosdb.core.datastore.ServiceKeyValue;
 import org.kairosdb.core.exception.DatastoreException;
 
 import java.util.Collections;
@@ -16,7 +15,7 @@ public class FakeServiceKeyStore implements ServiceKeyStore
 	}
 
 	@Override
-	public ServiceKeyValue getValue(String service, String serviceKey, String key) throws DatastoreException
+	public String getValue(String service, String serviceKey, String key) throws DatastoreException
 	{
 		return null;
 	}
@@ -43,11 +42,5 @@ public class FakeServiceKeyStore implements ServiceKeyStore
 	public void deleteKey(String service, String serviceKey, String key) throws DatastoreException
 	{
 
-	}
-
-	@Override
-	public Date getServiceKeyLastModifiedTime(String s, String s1) throws DatastoreException
-	{
-		return null;
 	}
 }

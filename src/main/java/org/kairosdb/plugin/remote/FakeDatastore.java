@@ -52,22 +52,4 @@ public class FakeDatastore implements Datastore
 	{
 		return new TagSetImpl();
 	}
-
-	@Override
-	public void indexMetricTags(DatastoreMetricQuery datastoreMetricQuery) throws DatastoreException
-	{
-		
-	}
-
-	@Override
-	public long getMinTimeValue()
-	{
-		return 0;
-	}
-
-	@Override
-	public long getMaxTimeValue()
-	{
-		return 0;
-	}
 }
